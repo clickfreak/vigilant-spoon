@@ -1,0 +1,119 @@
+---
+
+- name: Deploy powerdns test instance on vscale.io
+  hosts:
+    - powerdns
+  gather_facts: yes
+  user: root
+  tags:
+    - deploy
+
+  vars:
+    postgres_password: mysecretpowerdnspassword
+
+  pre_tasks:
+    - name: Install some packages
+      apt:
+        pkg: "{{ item }}"
+        state: latest
+      with_items:
+        - apt-transport-https
+        - ca-certificates
+        - tcpdump
+        - vim-nox
+        - mc
+        - bash-completion
+        - mtr-tiny
+        - apparmor
+        - python-pip
+        - atop
+        - htop
+        - strace
+        - postgresql-common
+        - postgresql-client
+        - python-psycopg2
+
+    - name: Add the PowerDNS repository key
+      apt_key:
+        url: http://repo.powerdns.com/FD380FBB-pub.asc
+        id: 9FAAA5577E8FCF62093D036C1B0C6205FD380FBB
+
+    - name: Add the Docker repository key
+      apt_key:
+        keyserver: hkp://p80.pool.sks-keyservers.net:80
+        id: 58118E89F3A912897C070ADBF76221572C52609D
+
+# apt-key adv --keyserver hkp://p80.pool.sks-keyservers.net:80 --recv-keys 
+
+    - name: Add the PowerDNS and the Docker repository
+      apt_repository:
+        repo: "{{ item }}"
+      with_items:
+        - "deb [arch=amd64] http://repo.powerdns.com/{{ansible_lsb.id | lower}} {{ansible_distribution_release|lower}}-auth-40 main"
+        - "deb https://apt.dockerproject.org/repo {{ansible_lsb.id | lower}}-{{ansible_distribution_release|lower}} main"
+
+    - name: Install docker-engine
+      apt:
+        pkg: "{{ item }}"
+        state: latest
+      with_items:
+        - docker-engine
+
+    - name: Install Docker module python deps (sad, but by pip...)
+      pip:
+        name: docker-py
+        state: latest
+
+    - name: Start Postgresql container
+      docker_container:
+        name: pgsql
+        image: postgres:9.5
+        state: started
+        volumes:
+          - /pgdata:/var/lib/postgresql/data
+        env:
+          POSTGRES_PASSWORD: "{{ postgres_password }}"
+      register: postgres_container
+
+    # - debug:
+    #     var: postgres_container
+    - set_fact:
+        postgresql_ip: '{{ postgres_container["ansbile_facts"]["ansible_docker_container"]["NetworkSettings"]["IPAddress"] }}'
+
+    - name: Config pdns database
+      postgresql_db:
+        login_host: '{{ postgresql_ip }}'
+        login_user: postgres
+        login_password: "{{ postgres_password }}"
+        encoding: 'UTF8'
+        lc_collate: 'en_US.utf8'
+        lc_ctype: 'en_US.utf8'
+        name: powerdns
+        state: present
+
+    - name: Send db scheme
+      # when: is_db_created|changed
+      # register: is_scheme_updated
+      ignore_errors: yes
+      copy:
+        src: "postgresql_powerdns_schema.sql"
+        dest: "/tmp/postgresql_powerdns_schema.sql"
+
+    - name: Apply powerdns scheme into postgresql
+      environment:
+        PGPASSWORD: "{{ postgres_password }}"
+      shell: "cat /tmp/postgresql_powerdns_schema.sql | psql -h {{ postgresql_ip }} -p 5432 -U postgres powerdns"
+
+  roles:
+    - role: pdns-ansible
+      pdns_config:
+        default-soa-name: ns1.clickfreak.pw
+        default-soa-mail: dnsmaster.clickfreak.pw
+        out-of-zone-additional-processing: no
+      pdns_backends:
+        gpgsql:
+          dbname: powerdns
+          user: postgres
+          host: "{{ postgresql_ip }}"
+          password: "{{ postgres_password }}"
+          dnssec: "yes"
