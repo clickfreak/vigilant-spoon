@@ -110,6 +110,11 @@
         default-soa-name: ns1.clickfreak.pw
         default-soa-mail: dnsmaster.clickfreak.pw
         out-of-zone-additional-processing: no
+        cache-ttl: "0"
+        recursive-cache-ttl: "0"
+        negquery-cache-ttl: "0"
+        query-cache-ttl: "0"
+        soa-minimum-ttl: "0"
       pdns_backends:
         gpgsql:
           dbname: powerdns
@@ -117,3 +122,5 @@
           host: "{{ postgresql_ip }}"
           password: "{{ postgres_password }}"
           dnssec: "yes"
+      tags:
+        - powerdns
